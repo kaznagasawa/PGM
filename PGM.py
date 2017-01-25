@@ -1,0 +1,462 @@
+# TO-DO: Make F connected, if not
+
+import scipy
+import networkx as nx
+import itertools
+import time
+import scipy.ndimage
+#import copy
+
+class factor(object):
+    def __init__(self,var,card,val):
+        self.var =  scipy.array(var)
+        self.card = scipy.array(card).astype(int)
+        self.val =  scipy.array(val)
+        
+    def FactorOperation(self,f,oper='P'):
+        """Takes factor product with another factor f
+           oper ='P' for Product,'S' for Sum """
+        if len(self.var) == 0:
+            return f
+        if len(f.var) == 0:
+            return self
+        var = scipy.union1d(self.var,f.var)
+        card = scipy.empty(len(var))
+        
+        map1 = [scipy.where(var==i)[0][0] for i in self.var]
+        map2 = [scipy.where(var==i)[0][0] for i in f.var]
+        card[map1]=self.card
+        card[map2] = f.card
+        
+        val = scipy.zeros(card.prod(dtype=int))
+        
+        assignments = I2A(range(int( card.prod() )), card)
+        indx1 = A2I(assignments[:, map1], self.card)
+        indx2 = A2I(assignments[:, map2], f.card)
+        if oper == 'P':
+            val = self.val[indx1] * f.val[indx2]
+        elif oper =='S':
+            val = self.val[indx1] + f.val[indx2]
+        return factor(var,card,val)
+
+    def ObserveEvidence(self,E):
+        """Return the factor corresponding to evidence E,
+        E is a dictionary with variable name as keys, and value observed as values"""
+        for v,e in E.iteritems():
+            indx, = (self.var==v).nonzero() # find i where f.var[i]=v
+            if indx.size != 0:
+                A = I2A(range(len(self.val)), self.card) # all assignments
+                A = A[:,indx].flatten() # only interested in 'indx' element of each row
+                self.val[A != e] = 0
+
+    def Marginalize(self,V):
+        """Eliminate Variables present in list V"""
+        var = scipy.setdiff1d(self.var,V)
+        map1 = [scipy.where(self.var==i)[0][0] for i in var]
+        card = self.card[map1]
+        
+        assignments = I2A(range(len(self.val)), self.card)
+        indx = A2I(assignments[:, map1], card)
+        
+        val = scipy.ndimage.sum(self.val,indx,index = range( card.prod() ))
+        return factor(var,card,val)
+
+    def MaxMarginalize(self,V):
+        """Eliminate Variables present in list V"""
+        var = scipy.setdiff1d(self.var,V)
+        map1 = [scipy.where(self.var==i)[0][0] for i in var]
+        card = self.card[map1]
+        
+        assignments = I2A(range(len(self.val)), self.card)
+        indx = A2I(assignments[:, map1], card)
+        
+        val = scipy.ndimage.maximum(self.val,indx,index = range( card.prod() ))
+        return factor(var,card,val)
+        
+    def copy(self):
+        return factor(self.var,self.card,self.val)
+        
+    def __mul__(self,f):
+        return self.FactorOperation(f,'P')
+    def __add__(self,f):
+        return self.FactorOperation(f,'S')
+    def __pow__(self,p): # useful for TRW Message passing
+        return factor(self.var,self.card,self.val**p)
+
+class FactorList(object):
+    """Contains a list of factors"""
+    def __init__(self,factors):
+        self.factors = list(factors)
+        self.g = self.create_graph()
+        self.cardVec = self.getCardVec()
+        self.var2facs = self.getVar2FactorsMap()
+    def update(self):
+        """Updates the graph if some factors are added to the list"""
+        self.g = self.create_graph()
+    def create_graph(self):
+        """Creates networkx graph"""
+        g = nx.Graph()
+        
+        for f in self.factors:
+            g.add_nodes_from( f.var )
+            g.add_edges_from( itertools.combinations(f.var,2) )
+        return g
+    
+    def getAllNodes(self):
+        """returns all nodes"""
+        return self.g.nodes()
+    def getCardVec(self):
+        """cardinality vector: cardVec[i] = cardinality of node i"""
+        V = self.getAllNodes()
+        cardVec = scipy.empty_like(V)
+        for i,v in enumerate(V):
+            for f in self.factors:
+                if v in f.var:
+                    index, = (f.var == v).nonzero()                
+                    cardVec[i]=f.card[ index[0] ]
+                    break
+        return cardVec.astype(int)
+        
+    def getAdjMatrix(self):
+        return nx.adj_matrix(self.g)
+
+    def getVar2FactorsMap(self):
+        """gives a list where each element represents a node and gives a list of 
+           indices of factors in "F" which contain that node in its scope"""
+        V = self.getAllNodes()
+        return list(list(idx for idx,f in enumerate(self.factors) if i in f.var) for i in V) 
+
+    def make_connected(self):
+        """If g is not connected, add redundant factors to make it connected)"""
+        if nx.is_connected(self.g): return
+        import random
+        cc = list( nx.connected_components(self.g) )
+        nodes = [random.sample(cluster,1)[0] for cluster in cc]
+        for n1,n2 in zip(nodes[:-1],nodes[1:]):
+            self.factors.append(factor(var=[n1,n2], card=self.cardVec[[n1,n2]], val=scipy.ones(4)))
+        self.update()
+        
+    def JointDistn(self):
+        """Computes unnormalized Joint Distribution based on the list of factors"""
+        if len(self.factors)==1:
+            return self.factors[0]
+        F = self.factors[0]
+        for i in range(1,len(self.factors)):
+            F = F * self.factors[i]
+        self.JDist = F
+        return F
+
+    def ObserveEvidence(self,E):
+        """Return the factor corresponding to evidence E,
+        E is a dictionary with variable name as keys, and value observed as values"""
+        for f in self.factors:
+            f.ObserveEvidence(E)
+
+    def MarginalDistn(self, V, E={} ):
+        """Computes Marginal Distn of variable list V under evidence E"""
+        
+        J= self.JointDistn()
+        J.ObserveEvidence(E)
+        M = J.Marginalize(scipy.setdiff1d(J.var,V))
+        M.val = M.val/(sum(M.val))
+        return M
+    
+    def run_inference(self,isMax = 1,findZ = 0):
+        """Runs Inference; isMax=1 for MAP,0 for Marginals;
+           findZ = 1 to compute Z while performing Marginal Inference"""
+#        st=time.time()
+        self.make_connected()
+        self.nop = 0 # number of operations
+        T=CliqueTree(self,isMax,findZ)
+        if isMax == 0:
+            self.marg_clique_tree = T
+        elif isMax==1:
+            self.MAP_clique_tree = T
+#        print time.time()-st'=
+        self.nop += T.nop
+        M=[]
+        for i in self.g.nodes(): # assuming nodes are labeled 0..N-1
+            for f in T.factors:
+                if i in f.var:
+                    if isMax==0:
+                        dummy = f.Marginalize(scipy.setdiff1d(f.var,i))
+                        if findZ == 0:
+                            dummy.val = dummy.val/sum(dummy.val)
+                    else:
+                        dummy = f.MaxMarginalize(scipy.setdiff1d(f.var,i))
+                    self.nop += scipy.prod(f.card)
+                    M.append(dummy)
+                    break
+#        print time.time()-st
+        return M
+    
+    def find_clique_marginal(self,cliques):
+        """Takes a list of cliques as an input; output is a list of marginals
+           of tose cliques. Assumes inference has been run on F, so it has an
+           entity F.marg_clique_tree"""
+        M = []   
+        for clq in cliques:
+            for f in self.marg_clique_tree.factors:                
+                if scipy.all([s in f.var for s in clq]):
+                    marg = f.Marginalize(scipy.setdiff1d(f.var,clq))
+                    marg.val = marg.val/sum(marg.val)
+                    M.append(marg)
+                    break
+        return M
+        
+class CliqueTree(object):
+    """A Clique Tree"""
+    def __init__(self,F,isMax,findZ):
+        """initializes the clique tree from a FactorList"""
+        self.nop = 0
+        self.create_clique_tree(F)
+        self.calibrate(isMax,findZ)
+    def create_clique_tree(self,F):
+        """Takes FactorList as input, creates clique tree"""
+        
+        N = F.g.number_of_nodes()        
+        g2 = F.g.copy()
+        
+        nodeList = []
+        clq_ind = []# For each clique, a list of nodes whose elimination would lead to each from that clique
+        E = scipy.zeros([N,N])
+        for k in range(N):
+#            sorted_list = sorted(g2.degree_iter(),key = lambda item:item[1]) # sort by degree
+#            n = sorted_list[0][0] # extract first element (min neighbors)
+            n = min_fill_node(g2) # uncomment above 2 lines for min-neighbor
+            clique,g2,clq_ind,E = eliminate_var(n, g2,clq_ind,E)
+            nodeList.append(scipy.array(clique))           
+        nodeList,E= prune_tree(nodeList,E)
+
+        C,nop = compute_initial_potentials(nodeList,F)
+#        self.nodeList = nodeList
+        self.edges = E
+        self.factors = C
+        self.nop += nop
+    def calibrate(self,isMax,findZ):
+        
+        N = len(self.factors)
+        if isMax==1:
+            for i in range(N):
+                self.factors[i].val=scipy.log(self.factors[i].val)
+                
+        messages = scipy.array([[factor([],[],[])]*N]*N)
+        msg_ind = scipy.zeros([N,N]) 
+        # msg_ind indicates whether message has been passed from i to j or not
+        I,J = get_next_cliques(self.edges,msg_ind)
+        while I >= 0:
+            dummy = self.factors[I]
+            for k in range(N):
+#                if self.edges[I,k]==1 and k !=J: # temp change, migh switch back later
+                if msg_ind[k,I]==1 and k !=J:
+                    if isMax==0:
+                        dummy *= messages[k][I]
+                    else:
+                        dummy += messages[k][I]
+                    self.nop += scipy.prod(dummy.card)
+            if isMax==0:
+                messages[I,J]= dummy.Marginalize( scipy.setdiff1d(self.factors[I].var,self.factors[J].var))
+                if findZ==0: messages[I,J].val=messages[I,J].val/sum(messages[I,J].val)
+            else:
+                messages[I,J]=dummy.MaxMarginalize( scipy.setdiff1d(self.factors[I].var,self.factors[J].var))
+            self.nop += scipy.prod(dummy.card)
+            msg_ind[I,J] = 1 # message passed from I to J
+            I,J = get_next_cliques(self.edges,msg_ind)
+        for i in range(N):
+            if isMax==0:
+                self.factors[i] = self.factors[i] * reduce(lambda x,y:x*y,(messages[j,i]for j in range(N)))
+            else:
+                self.factors[i] = self.factors[i] + reduce(lambda x,y:x+y,(messages[j,i]for j in range(N)))
+            self.nop += N*scipy.prod(self.factors[i].card) # check this
+
+def min_fill_node(g):
+    """returns the node with minimum fill edges"""
+    return min( g.nodes(),key = lambda x:fill_edges(g,x) )
+def fill_edges(g,n):         
+    ngbrs = g.neighbors(n)        
+    # e = number of edges between neighbors of 'n' 
+    e = sum([g.edge[i].has_key(j) for i,j in itertools.combinations(ngbrs,2) ])
+    return len(ngbrs)*(len(ngbrs)-1)/2 - e
+        
+def eliminate_var(n, g,clq_ind,E):
+    """Eliminates n from graph defined by factorlist F"""
+    l = len(clq_ind)
+    new_clique = g.neighbors(n) # we will add 'n' to it later
+    new_ind = scipy.array(g.neighbors(n))
+    new_clique.append(n)
+    
+    g.add_edges_from( itertools.combinations(new_clique,2) )    
+    
+    for i,clq in enumerate(clq_ind):
+        if n in clq:
+            E[l,i] = 1
+            E[i,l] = 1
+            clq_ind[i] = scipy.setdiff1d(clq,new_clique)
+   
+    clq_ind.append(new_ind)
+    g.remove_node(n)
+
+    return new_clique,g,clq_ind,E
+
+def prune_tree(nodeList,E):
+    to_remove = []
+    for i,n in enumerate(nodeList):
+        if i in to_remove:
+            continue
+        nbrs, = E[i].nonzero()
+        for j in nbrs:
+            if j in to_remove:
+                continue
+            if scipy.all([dummy in nodeList[j] for dummy in n])==True:
+                for n2 in nbrs:
+                    if n2 !=j:
+                        E[j,n2] = 1
+                        E[n2,j] = 1
+                to_remove.append(i)
+                E[i,:] = 0
+                E[:,i] = 0
+                break
+    E=scipy.delete(E,to_remove,0) # delete rows and columns from adjacency matrix
+    E=scipy.delete(E,to_remove,1)
+    
+    new_nodeList = [n for i,n in enumerate(nodeList) if i not in to_remove]
+    return new_nodeList,E
+        
+def compute_initial_potentials(nodeList,F):
+    """Computes initial potentials for clique trees"""
+    nop = 0
+    N=len(nodeList)
+    
+    #assignment of factors to cliques
+    alpha = -1*scipy.ones(len(F.factors), dtype=int)
+    
+    for i,f in enumerate(F.factors):
+        for j,n in enumerate(nodeList):
+            if len(scipy.setdiff1d(f.var,n) ) ==0:
+                alpha[i] = int(j)
+                break
+    P = []
+    for i in range(N):
+        var = nodeList[i].astype(int)
+        card = F.cardVec[var]
+        val = scipy.ones( card.prod() )
+        P.append( factor(var,card,val) )
+    
+    for i,j in enumerate(alpha):
+        P[j] = P[j] * F.factors[i]
+        nop += scipy.prod(P[j].card)
+    return P,nop
+
+def get_next_cliques(edges,msg_ind):
+    """outputs next pair of cliques between whom message can be passed,
+    If negative numbers, no pair of cliques possible"""
+    N = edges.shape[0]
+    
+    for i in range(N):
+        # There should be an edge between i and j; and no message from i to j
+        candidates = scipy.logical_not(msg_ind[i,:])
+        candidates, = scipy.logical_and(candidates,edges[i,:]).nonzero()
+        for j in candidates:
+            # if all neighbouring cliques except j have sent a message
+            msg_indices = [msg_ind[k,i] for k in range(N) if edges[k,i]==1 and k!=j]
+            if scipy.all(msg_indices):
+                return i,j
+    return -1,-1 # returning -1 would mean no more cliques; all messages have been passed
+    
+def max_decode(M):
+    asgnmnt = scipy.array([ f.val.argmax() for f in M])
+    return asgnmnt
+    
+def A2I(A,card):
+    """Takes assignment and cardinality vector as an input, outputs its index in
+       the val array"""
+    A = scipy.atleast_2d(A)
+    return scipy.sum( ( scipy.hstack([1,card[:-1]]).cumprod() )* A ,1).astype(int)
+
+def I2A(I,card):
+    """Takes  array index and cardinality vector as an input, returns assignment"""
+    m,n = len(I), len(card)
+    A = (scipy.repeat(I,n)//scipy.tile( scipy.hstack([1,card[:-1]]).cumprod(), m)) % scipy.tile(card, m)
+         # // - floor division, % - modulus
+    return A.reshape([m,n])
+    
+def factors2ExpFam(F):
+    F.make_connected()
+    m = len(F.g.nodes())
+    theta = scipy.zeros([m,m])
+
+    I = scipy.eye(m)
+    A = scipy.vstack( (I,scipy.zeros(m)) )
+    val_s = scipy.sum( scipy.log([f.val[A2I(A[:,f.var],f.card)] for f in F.factors]), axis=0)
+    scipy.fill_diagonal(theta, val_s[:-1]-val_s[-1]) # theta_s[s] = f1[s]/f0 goes in diagonal
+    
+    A = scipy.array( [I[s]+I[t] for s,t in F.g.edges()])
+    val = scipy.sum(scipy.log([f.val[A2I(A[:,f.var],f.card)] for f in F.factors]), axis=0)
+    for i, (s,t) in enumerate(F.g.edges()):
+        if s>t: s,t = t,s # s should be smaller than t            
+        theta[s,t] = val[i]+val_s[-1]-val_s[s]-val_s[t] #f11*f00/f01*f10
+    return theta
+    
+def expfam2Factors(theta):
+    """Convert from theta to factorList"""
+    facList = []
+    m = theta.shape[0]
+    for s,th in enumerate(scipy.diag(theta)):
+        facList.append(factor(var=[s],card=[2],val = [1,scipy.exp(th)]))
+    for s,t in itertools.combinations(range(m),2):
+        if not scipy.isclose(theta[s,t],0):
+            facList.append(factor(var=[s,t],card=[2,2],val=[1,1,1,scipy.exp(theta[s,t])]))
+    F = FactorList(facList)
+    F.make_connected()
+    return F
+
+def test_conversion():
+    """Test function for factors2exp and expfam2Factors; converts F->expFam->F2
+       prints True if F and F2 have same distribution; which is necessary for
+       functions to work. Something wrong if False is printed"""
+    f1 = factor([0,1],[2,2],scipy.rand(4))
+    f2 = factor([1,2],[2,2],scipy.rand(4))
+    f3 = factor([3],[2],scipy.rand(2))
+
+    F = FactorList([f1,f2,f3])
+    theta = factors2ExpFam(F)
+    F2 = expfam2Factors(theta)
+    ratio = F2.JointDistn().val/ (F.JointDistn().val)
+    ratio = ratio/ratio[0]
+    print scipy.allclose(ratio,1)
+
+def greedy_MAP_assignment(theta,random_runs = 10,heur = 'first'):
+    """starts with a random assignment; then make greedy improvements by
+       looking at neighboring assignments until possible;
+       random_runs: Number of random restarts, best of all is picked, default=10
+       heur:'first' changes the first node with improvement,'best' looks at all
+              nodes and changes the one with maximum improvement"""
+    N = theta.shape[0]
+    scipy.random.seed()
+    max_p = -scipy.inf
+    for k in range(random_runs):
+        A = scipy.random.randint(2,size = N)
+        improved = True
+        p = A.dot( theta.dot(A) )
+        while improved:
+            improved = False
+            if heur == 'first':
+                p2 = -scipy.inf
+                perm = scipy.random.permutation(N)
+                for s in perm:
+                    #dp: change in p if A[i] bit is reversed
+                    dp = (1-2*A[s])*( A.dot(theta[s,:]+ theta[:,s]) ) + theta[s,s]
+                    if dp>0:
+                        p2 = dp
+                        break
+
+            if heur == 'best':
+                dp = (1-2*A)*( A.dot(theta + theta.T) ) + scipy.diag(theta)
+                p2,s = dp.max(), dp.argmax()
+            if p2 > 0:
+                A[s] = 1-A[s]
+                improved = True
+                p += p2
+        if p>max_p:
+            greedy_A,max_p = A.copy(),p
+    return greedy_A.astype(int),max_p
