@@ -1,6 +1,7 @@
 import PGM
 import scipy
 import networkx as nx
+import time
 import matplotlib.pyplot as plt
 plt.rc('text', usetex=True)
 
