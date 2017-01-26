@@ -217,56 +217,56 @@ class CliqueTree(object):
         N = F.g.number_of_nodes()        
         g2 = F.g.copy()
         
-        nodeList = []
         clq_ind = []# For each clique, a list of nodes whose elimination would lead to each from that clique
-        E = scipy.zeros([N,N])
+        tree = nx.Graph()
+        tree.add_nodes_from(range(N))
         for k in range(N):
 #            sorted_list = sorted(g2.degree_iter(),key = lambda item:item[1]) # sort by degree
 #            n = sorted_list[0][0] # extract first element (min neighbors)
             n = min_fill_node(g2) # uncomment above 2 lines for min-neighbor
-            clique,g2,clq_ind,E = eliminate_var(n, g2,clq_ind,E)
-            nodeList.append(scipy.array(clique))           
-        nodeList,E= prune_tree(nodeList,E)
+            eliminate_var(n, g2,clq_ind,tree)
+        tree = prune_tree(tree)
 
-        C,nop = compute_initial_potentials(nodeList,F)
-#        self.nodeList = nodeList
-        self.edges = E
-        self.factors = C
+        P,nop = compute_clique_potentials(tree,F)
+        self.tree = tree
+        self.factors = P
         self.nop += nop
+        
     def calibrate(self,isMax,findZ):
         
         N = len(self.factors)
         if isMax==1:
             for i in range(N):
                 self.factors[i].val=scipy.log(self.factors[i].val)
-                
-        messages = scipy.array([[factor([],[],[])]*N]*N)
-        msg_ind = scipy.zeros([N,N]) 
-        # msg_ind indicates whether message has been passed from i to j or not
-        I,J = get_next_cliques(self.edges,msg_ind)
+        
+        d_tree = self.tree.to_directed()
+        for i,j in d_tree.edges():
+            d_tree.edge[i][j]['msg'] = factor([],[],[])
+            d_tree.edge[i][j]['msg_ind'] = 0# message passed from i to j or not
+        
+        I,J = get_next_cliques(d_tree)
         while I >= 0:
             dummy = self.factors[I]
-            for k in range(N):
-#                if self.edges[I,k]==1 and k !=J: # temp change, migh switch back later
-                if msg_ind[k,I]==1 and k !=J:
+            for k in d_tree.predecessors(I):
+                if d_tree.edge[k][I]['msg_ind']==1 and k !=J:# temp change, might switch back later
                     if isMax==0:
-                        dummy *= messages[k][I]
+                        dummy *= d_tree.edge[k][I]['msg']
                     else:
-                        dummy += messages[k][I]
+                        dummy += d_tree[k][I]['msg']
                     self.nop += scipy.prod(dummy.card)
             if isMax==0:
-                messages[I,J]= dummy.Marginalize( scipy.setdiff1d(self.factors[I].var,self.factors[J].var))
-                if findZ==0: messages[I,J].val=messages[I,J].val/sum(messages[I,J].val)
+                d_tree.edge[I][J]['msg']= dummy.Marginalize( scipy.setdiff1d(self.factors[I].var,self.factors[J].var))
+                if findZ==0: d_tree.edge[I][J]['msg'].val=d_tree.edge[I][J]['msg'].val/sum(d_tree.edge[I][J]['msg'].val)
             else:
-                messages[I,J]=dummy.MaxMarginalize( scipy.setdiff1d(self.factors[I].var,self.factors[J].var))
+                d_tree.edge[I][J]['msg']=dummy.MaxMarginalize( scipy.setdiff1d(self.factors[I].var,self.factors[J].var))
             self.nop += scipy.prod(dummy.card)
-            msg_ind[I,J] = 1 # message passed from I to J
-            I,J = get_next_cliques(self.edges,msg_ind)
+            d_tree.edge[I][J]['msg_ind'] = 1 # message passed from I to J
+            I,J = get_next_cliques(d_tree)
         for i in range(N):
             if isMax==0:
-                self.factors[i] = self.factors[i] * reduce(lambda x,y:x*y,(messages[j,i]for j in range(N)))
+                self.factors[i] *= reduce(lambda x,y:x*y,(d_tree.edge[j][i]['msg'] for j in d_tree.successors(i)))
             else:
-                self.factors[i] = self.factors[i] + reduce(lambda x,y:x+y,(messages[j,i]for j in range(N)))
+                self.factors[i] += reduce(lambda x,y:x+y,(d_tree.edge[j][i]['msg'] for j in d_tree.successors(i)))
             self.nop += N*scipy.prod(self.factors[i].card) # check this
 
 def min_fill_node(g):
@@ -277,8 +277,8 @@ def fill_edges(g,n):
     # e = number of edges between neighbors of 'n' 
     e = sum([g.edge[i].has_key(j) for i,j in itertools.combinations(ngbrs,2) ])
     return len(ngbrs)*(len(ngbrs)-1)/2 - e
-        
-def eliminate_var(n, g,clq_ind,E):
+
+def eliminate_var(n, g,clq_ind,tree):
     """Eliminates n from graph defined by factorlist F"""
     l = len(clq_ind)
     new_clique = g.neighbors(n) # we will add 'n' to it later
@@ -289,55 +289,42 @@ def eliminate_var(n, g,clq_ind,E):
     
     for i,clq in enumerate(clq_ind):
         if n in clq:
-            E[l,i] = 1
-            E[i,l] = 1
+            tree.add_edge(l,i)
             clq_ind[i] = scipy.setdiff1d(clq,new_clique)
-   
+    
     clq_ind.append(new_ind)
     g.remove_node(n)
+    tree.node[l]['clique'] = new_clique
+#    return g,clq_ind,tree
 
-    return new_clique,g,clq_ind,E
-
-def prune_tree(nodeList,E):
-    to_remove = []
-    for i,n in enumerate(nodeList):
-        if i in to_remove:
-            continue
-        nbrs, = E[i].nonzero()
+def prune_tree(tree):
+    nodes = tree.nodes() # copy since tree.nodes() will be modified
+    for i in nodes:
+        nbrs = tree.neighbors(i)
         for j in nbrs:
-            if j in to_remove:
-                continue
-            if scipy.all([dummy in nodeList[j] for dummy in n])==True:
-                for n2 in nbrs:
-                    if n2 !=j:
-                        E[j,n2] = 1
-                        E[n2,j] = 1
-                to_remove.append(i)
-                E[i,:] = 0
-                E[:,i] = 0
+            # if i \subset j
+            if len(scipy.setdiff1d(tree.node[i]['clique'],tree.node[j]['clique'])) == 0:                
+                tree.add_edges_from([(j,n2) for n2 in nbrs if n2 != j])
+                tree.remove_node(i)
                 break
-    E=scipy.delete(E,to_remove,0) # delete rows and columns from adjacency matrix
-    E=scipy.delete(E,to_remove,1)
-    
-    new_nodeList = [n for i,n in enumerate(nodeList) if i not in to_remove]
-    return new_nodeList,E
+    return tree
         
-def compute_initial_potentials(nodeList,F):
+def compute_clique_potentials(tree,F):
     """Computes initial potentials for clique trees"""
     nop = 0
-    N=len(nodeList)
+    N=tree.number_of_nodes()
     
     #assignment of factors to cliques
     alpha = -1*scipy.ones(len(F.factors), dtype=int)
     
     for i,f in enumerate(F.factors):
-        for j,n in enumerate(nodeList):
-            if len(scipy.setdiff1d(f.var,n) ) ==0:
+        for j,data in tree.nodes_iter(data=True):
+            if len(scipy.setdiff1d(f.var,data['clique']) ) ==0:
                 alpha[i] = int(j)
                 break
     P = []
     for i in range(N):
-        var = nodeList[i].astype(int)
+        var = scipy.array(tree.node[i]['clique'],dtype=int)
         card = F.cardVec[var]
         val = scipy.ones( card.prod() )
         P.append( factor(var,card,val) )
@@ -347,20 +334,22 @@ def compute_initial_potentials(nodeList,F):
         nop += scipy.prod(P[j].card)
     return P,nop
 
-def get_next_cliques(edges,msg_ind):
+def get_next_cliques(tree):
     """outputs next pair of cliques between whom message can be passed,
     If negative numbers, no pair of cliques possible"""
-    N = edges.shape[0]
+    N = tree.number_of_nodes()
     
     for i in range(N):
         # There should be an edge between i and j; and no message from i to j
-        candidates = scipy.logical_not(msg_ind[i,:])
-        candidates, = scipy.logical_and(candidates,edges[i,:]).nonzero()
-        for j in candidates:
+#        candidates = scipy.logical_not(msg_ind[i,:])
+#        candidates, = scipy.logical_and(candidates,edges[i,:]).nonzero()
+        for j in tree.successors(i):
+            if tree.edge[i][j]['msg_ind']==0:
             # if all neighbouring cliques except j have sent a message
-            msg_indices = [msg_ind[k,i] for k in range(N) if edges[k,i]==1 and k!=j]
-            if scipy.all(msg_indices):
-                return i,j
+                msg_indices = [tree.edge[k][i]['msg_ind'] for k in tree.predecessors(i) if k!=j]
+                if scipy.all(msg_indices):
+                    return i,j
+                    
     return -1,-1 # returning -1 would mean no more cliques; all messages have been passed
     
 def max_decode(M):

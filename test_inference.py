@@ -32,7 +32,17 @@ for i in range(21):
     nodeList.append(var)
 
 F=PGM.FactorList(factors)
-isMax = 1
+isMax = 0
+
+#g = nx.erdos_renyi_graph(10,.3,seed=1234) # g should be connected
+#scipy.random.seed(38422)
+#fac_list = []
+#for e1,e2 in g.edges():
+#    f = PGM.factor(var=[e1,e2],card=[2,2],val=scipy.rand(4))
+#    f.val[3] = (1+.4*scipy.rand()) * f.val[1] * f.val[2] / f.val[0]
+#    fac_list.append(f)
+#F = PGM.FactorList(fac_list)
+    
 st = time.time()
 
 pr.enable()
