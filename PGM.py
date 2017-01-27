@@ -176,7 +176,8 @@ class FactorList(object):
         self.nop += T.nop
         M=[]
         for i in self.g.nodes(): # assuming nodes are labeled 0..N-1
-            for f in T.factors:
+            for s,data in T.nodes_iter(data=True):
+                f = data['fac']
                 if i in f.var:
                     if isMax==0:
                         dummy = f.Marginalize(scipy.setdiff1d(f.var,i))
@@ -204,71 +205,82 @@ class FactorList(object):
                     break
         return M
         
-class CliqueTree(object):
-    """A Clique Tree"""
+class CliqueTree(nx.DiGraph):
+    """Clique Tree object: it is "directed tree" which means self.to_undirected()
+    is an undirected tree. Each node contains calibrated factors and each directed
+    edge contains message passed from O to D of that edge"""
     def __init__(self,F,isMax,findZ):
         """initializes the clique tree from a FactorList"""
+        nx.DiGraph.__init__(self)
+        tree = create_clique_tree(F.g)
+        d_tree = tree.to_directed()
+        self.add_nodes_from( d_tree.nodes(data=True) )
+        self.add_edges_from( d_tree.edges(data=True) )
         self.nop = 0
-        self.create_clique_tree(F)
+        
+        self.compute_clique_potentials(F)
+        
         self.calibrate(isMax,findZ)
-    def create_clique_tree(self,F):
-        """Takes FactorList as input, creates clique tree"""
-        
-        N = F.g.number_of_nodes()        
-        g2 = F.g.copy()
-        
-        clq_ind = []# For each clique, a list of nodes whose elimination would lead to each from that clique
-        tree = nx.Graph()
-        tree.add_nodes_from(range(N))
-        for k in range(N):
-#            sorted_list = sorted(g2.degree_iter(),key = lambda item:item[1]) # sort by degree
-#            n = sorted_list[0][0] # extract first element (min neighbors)
-            n = min_fill_node(g2) # uncomment above 2 lines for min-neighbor
-            eliminate_var(n, g2,clq_ind,tree)
-        tree = prune_tree(tree)
 
-        P,nop = compute_clique_potentials(tree,F)
-        self.tree = tree
-        self.factors = P
-        self.nop += nop
+    def compute_clique_potentials(self,F):
+        """Computes initial potentials for clique trees"""
+        N=self.number_of_nodes()
+        
+        #assignment of factors to cliques
+        alpha = -1*scipy.ones(len(F.factors), dtype=int)
+        
+        for i,f in enumerate(F.factors):
+            for j,data in self.nodes_iter(data=True):
+                if len(scipy.setdiff1d(f.var,data['clique']) ) ==0:
+                    alpha[i] = int(j)
+                    break
+        for i in range(N):
+            var = scipy.array(self.node[i]['clique'],dtype=int)
+            card = F.cardVec[var]
+            val = scipy.ones( card.prod() )
+            self.node[i]['fac'] = factor(var,card,val)
+        
+        for i,j in enumerate(alpha):
+            self.node[j]['fac'] *= F.factors[i]
+            self.nop += scipy.prod(self.node[j]['fac'].card)
         
     def calibrate(self,isMax,findZ):
         
-        N = len(self.factors)
+        N = self.number_of_nodes()
         if isMax==1:
-            for i in range(N):
-                self.factors[i].val=scipy.log(self.factors[i].val)
+            for i in self.nodes():
+                self.node[i]['fac'].val=scipy.log(self.node[i]['fac'].val)
         
-        d_tree = self.tree.to_directed()
-        for i,j in d_tree.edges():
-            d_tree.edge[i][j]['msg'] = factor([],[],[])
-            d_tree.edge[i][j]['msg_ind'] = 0# message passed from i to j or not
+        for i,j in self.edges():
+            self.edge[i][j]['msg'] = factor([],[],[])
+            self.edge[i][j]['msg_ind'] = 0# message passed from i to j or not
         
-        I,J = get_next_cliques(d_tree)
+        I,J = get_next_cliques(self)
         while I >= 0:
-            dummy = self.factors[I]
-            for k in d_tree.predecessors(I):
-                if d_tree.edge[k][I]['msg_ind']==1 and k !=J:# temp change, might switch back later
+            dummy = self.node[I]['fac']
+            for k in self.predecessors(I):
+                if self.edge[k][I]['msg_ind']==1 and k !=J:# temp change, might switch back later
                     if isMax==0:
-                        dummy *= d_tree.edge[k][I]['msg']
+                        dummy *= self.edge[k][I]['msg']
                     else:
-                        dummy += d_tree[k][I]['msg']
+                        dummy += self.edge[k][I]['msg']
                     self.nop += scipy.prod(dummy.card)
             if isMax==0:
-                d_tree.edge[I][J]['msg']= dummy.Marginalize( scipy.setdiff1d(self.factors[I].var,self.factors[J].var))
-                if findZ==0: d_tree.edge[I][J]['msg'].val=d_tree.edge[I][J]['msg'].val/sum(d_tree.edge[I][J]['msg'].val)
+                self.edge[I][J]['msg']= dummy.Marginalize( scipy.setdiff1d(self.node[I]['fac'].var,self.node[J]['fac'].var))
+                if findZ==0: self.edge[I][J]['msg'].val=self.edge[I][J]['msg'].val/sum(self.edge[I][J]['msg'].val)
             else:
-                d_tree.edge[I][J]['msg']=dummy.MaxMarginalize( scipy.setdiff1d(self.factors[I].var,self.factors[J].var))
+                self.edge[I][J]['msg']=dummy.MaxMarginalize( scipy.setdiff1d(self.node[I]['fac'].var,self.node[J]['fac'].var))
             self.nop += scipy.prod(dummy.card)
-            d_tree.edge[I][J]['msg_ind'] = 1 # message passed from I to J
-            I,J = get_next_cliques(d_tree)
-        for i in range(N):
-            print i,N
+
+            self.edge[I][J]['msg_ind'] = 1 # message passed from I to J
+            I,J = get_next_cliques(self)
+            
+        for i in self.nodes():
             if isMax==0:
-                self.factors[i] *= reduce(lambda x,y:x*y,(d_tree.edge[j][i]['msg'] for j in d_tree.successors(i)))
+                self.node[i]['fac'] *= reduce(lambda x,y:x*y,(self.edge[j][i]['msg'] for j in self.successors(i)))
             else:
-                self.factors[i] += reduce(lambda x,y:x+y,(d_tree.edge[j][i]['msg'] for j in d_tree.successors(i)))
-            self.nop += N*scipy.prod(self.factors[i].card) # check this
+                self.node[i]['fac'] += reduce(lambda x,y:x+y,(self.edge[j][i]['msg'] for j in self.successors(i)))
+            self.nop += N*scipy.prod(self.node[i]['fac'].card) # check this
 
 def min_fill_node(g):
     """returns the node with minimum fill edges"""
@@ -279,8 +291,25 @@ def fill_edges(g,n):
     e = sum([g.edge[i].has_key(j) for i,j in itertools.combinations(ngbrs,2) ])
     return len(ngbrs)*(len(ngbrs)-1)/2 - e
 
+def create_clique_tree(g):
+    """creates clique tree from undirected graph g; and changes it to """
+    
+    N = g.number_of_nodes()        
+    g2 = g.copy()
+    
+    clq_ind = []# For each clique, a list of nodes whose elimination would lead to each from that clique
+    tree = nx.Graph()
+    tree.add_nodes_from(range(N))
+    for k in range(N):
+#            sorted_list = sorted(g2.degree_iter(),key = lambda item:item[1]) # sort by degree
+#            n = sorted_list[0][0] # extract first element (min neighbors)
+        n = min_fill_node(g2) # uncomment above 2 lines for min-neighbor
+        eliminate_var(n, g2,clq_ind,tree)
+    tree = prune_tree(tree)
+    return tree.to_directed()
+        
 def eliminate_var(n, g,clq_ind,tree):
-    """Eliminates n from graph defined by factorlist F"""
+    """Eliminates n from graph g; updates cld_ind and tree"""
     l = len(clq_ind)
     new_clique = g.neighbors(n) # we will add 'n' to it later
     new_ind = scipy.array(g.neighbors(n))
@@ -296,7 +325,6 @@ def eliminate_var(n, g,clq_ind,tree):
     clq_ind.append(new_ind)
     g.remove_node(n)
     tree.node[l]['clique'] = new_clique
-#    return g,clq_ind,tree
 
 def prune_tree(tree):
     nodes = tree.nodes() # copy since tree.nodes() will be modified
@@ -310,32 +338,6 @@ def prune_tree(tree):
                 break
     return tree
         
-def compute_clique_potentials(tree,F):
-    """Computes initial potentials for clique trees"""
-    nop = 0
-    
-    #assignment of factors to cliques
-    alpha = -1*scipy.ones(len(F.factors), dtype=int)
-    
-    for i,f in enumerate(F.factors):
-        for j,data in tree.nodes_iter(data=True):
-            if len(scipy.setdiff1d(f.var,data['clique']) ) ==0:
-                alpha[i] = int(j)
-                break
-    P = []
-    for i in tree.nodes():
-        var = scipy.array(tree.node[i]['clique'],dtype=int)
-        card = F.cardVec[var]
-        val = scipy.ones( card.prod() )
-        P.append( factor(var,card,val) )
-        tree.node[i]['factor'] = factor(var,card,val)
-    
-    for i,j in enumerate(alpha):
-        P[j] = P[j] * F.factors[i]
-        tree.node[j]['factor'] *= F.factors[i]
-        nop += scipy.prod(tree.node[j]['factor'].card)
-    return P,nop
-
 def get_next_cliques(tree):
     """outputs next pair of cliques between whom message can be passed,
     If negative numbers, no pair of cliques possible"""    
@@ -346,7 +348,6 @@ def get_next_cliques(tree):
                 msg_indices = [tree.edge[k][i]['msg_ind'] for k in tree.predecessors(i) if k!=j]
                 if scipy.all(msg_indices):
                     return i,j
-                    
     return -1,-1 # returning -1 would mean no more cliques; all messages have been passed
     
 def max_decode(M):
