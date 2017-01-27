@@ -204,10 +204,13 @@ class FactorList(object):
                     break
         return M
         
-class CliqueTree(object):
-    """A Clique Tree"""
+class CliqueTree(nx.DiGraph):
+    """Clique Tree object: it is "directed tree" which means self.to_undirected()
+    is an undirected tree. Each node contains calibrated factors and each directed
+    edge contains message passed from O to D of that edge"""
     def __init__(self,F,isMax,findZ):
         """initializes the clique tree from a FactorList"""
+        nx.DiGraph.__init__(self)
         self.nop = 0
         self.create_clique_tree(F)
         self.calibrate(isMax,findZ)
@@ -228,6 +231,7 @@ class CliqueTree(object):
         tree = prune_tree(tree)
 
         P,nop = compute_clique_potentials(tree,F)
+        
         self.tree = tree
         self.factors = P
         self.nop += nop
