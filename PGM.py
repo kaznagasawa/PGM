@@ -263,6 +263,7 @@ class CliqueTree(object):
             d_tree.edge[I][J]['msg_ind'] = 1 # message passed from I to J
             I,J = get_next_cliques(d_tree)
         for i in range(N):
+            print i,N
             if isMax==0:
                 self.factors[i] *= reduce(lambda x,y:x*y,(d_tree.edge[j][i]['msg'] for j in d_tree.successors(i)))
             else:
@@ -312,7 +313,6 @@ def prune_tree(tree):
 def compute_clique_potentials(tree,F):
     """Computes initial potentials for clique trees"""
     nop = 0
-    N=tree.number_of_nodes()
     
     #assignment of factors to cliques
     alpha = -1*scipy.ones(len(F.factors), dtype=int)
@@ -323,15 +323,17 @@ def compute_clique_potentials(tree,F):
                 alpha[i] = int(j)
                 break
     P = []
-    for i in range(N):
+    for i in tree.nodes():
         var = scipy.array(tree.node[i]['clique'],dtype=int)
         card = F.cardVec[var]
         val = scipy.ones( card.prod() )
         P.append( factor(var,card,val) )
+        tree.node[i]['factor'] = factor(var,card,val)
     
     for i,j in enumerate(alpha):
         P[j] = P[j] * F.factors[i]
-        nop += scipy.prod(P[j].card)
+        tree.node[j]['factor'] *= F.factors[i]
+        nop += scipy.prod(tree.node[j]['factor'].card)
     return P,nop
 
 def get_next_cliques(tree):
