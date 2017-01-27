@@ -336,15 +336,10 @@ def compute_clique_potentials(tree,F):
 
 def get_next_cliques(tree):
     """outputs next pair of cliques between whom message can be passed,
-    If negative numbers, no pair of cliques possible"""
-    N = tree.number_of_nodes()
-    
-    for i in range(N):
-        # There should be an edge between i and j; and no message from i to j
-#        candidates = scipy.logical_not(msg_ind[i,:])
-#        candidates, = scipy.logical_and(candidates,edges[i,:]).nonzero()
+    If negative numbers, no pair of cliques possible"""    
+    for i in tree.nodes():
         for j in tree.successors(i):
-            if tree.edge[i][j]['msg_ind']==0:
+            if tree.edge[i][j]['msg_ind']==0: #no message from i to j
             # if all neighbouring cliques except j have sent a message
                 msg_indices = [tree.edge[k][i]['msg_ind'] for k in tree.predecessors(i) if k!=j]
                 if scipy.all(msg_indices):
