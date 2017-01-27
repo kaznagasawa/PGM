@@ -59,7 +59,7 @@ for a in A:
     output=output+d[a]
 print output
 
-#pr.print_stats(sort='tottime')
+pr.print_stats(sort='tottime')
 #----Copied from test.py.
 #---code for testing PGM functions
 
