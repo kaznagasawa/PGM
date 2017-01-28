@@ -257,19 +257,21 @@ class CliqueTree(nx.DiGraph):
         
         I,J = get_next_cliques(self)
         while I >= 0:
+            setdiff = scipy.setdiff1d(self.node[I]['fac'].var,self.node[J]['fac'].var)
             dummy = self.node[I]['fac']
             for k in self.predecessors(I):
-                if self.edge[k][I]['msg_ind']==1 and k !=J:# temp change, might switch back later
+                if self.edge[k][I]['msg_ind']==1 and k !=J:
                     if isMax==0:
                         dummy *= self.edge[k][I]['msg']
                     else:
                         dummy += self.edge[k][I]['msg']
                     self.nop += scipy.prod(dummy.card)
             if isMax==0:
-                self.edge[I][J]['msg']= dummy.Marginalize( scipy.setdiff1d(self.node[I]['fac'].var,self.node[J]['fac'].var))
-                if findZ==0: self.edge[I][J]['msg'].val=self.edge[I][J]['msg'].val/sum(self.edge[I][J]['msg'].val)
+                self.edge[I][J]['msg']= dummy.Marginalize( setdiff )
+                if findZ==0: # DOnt marginalize to compute Z
+                    self.edge[I][J]['msg'].val=self.edge[I][J]['msg'].val/sum(self.edge[I][J]['msg'].val)
             else:
-                self.edge[I][J]['msg']=dummy.MaxMarginalize( scipy.setdiff1d(self.node[I]['fac'].var,self.node[J]['fac'].var))
+                self.edge[I][J]['msg']=dummy.MaxMarginalize( setdiff )
             self.nop += scipy.prod(dummy.card)
 
             self.edge[I][J]['msg_ind'] = 1 # message passed from I to J
@@ -277,9 +279,9 @@ class CliqueTree(nx.DiGraph):
             
         for i in self.nodes():
             if isMax==0:
-                self.node[i]['fac'] *= reduce(lambda x,y:x*y,(self.edge[j][i]['msg'] for j in self.successors(i)))
+                self.node[i]['fac'] *= reduce(lambda x,y:x*y,(self.edge[j][i]['msg'] for j in self.predecessors(i)))
             else:
-                self.node[i]['fac'] += reduce(lambda x,y:x+y,(self.edge[j][i]['msg'] for j in self.successors(i)))
+                self.node[i]['fac'] += reduce(lambda x,y:x+y,(self.edge[j][i]['msg'] for j in self.predecessors(i)))
             self.nop += N*scipy.prod(self.node[i]['fac'].card) # check this
 
 def min_fill_node(g):
