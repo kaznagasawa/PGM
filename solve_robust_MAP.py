@@ -239,7 +239,7 @@ def solve_EU_robust_MAP(nominal,interval):
 if __name__ == '__main__':
     
     n=20
-    g = nx.erdos_renyi_graph(n,.4,seed=7774) # g should be connected
+    g = nx.erdos_renyi_graph(n,.3,seed=7774) # g should be connected
     fac_list = []
     scipy.random.seed(1235)
     for e1,e2 in g.edges():

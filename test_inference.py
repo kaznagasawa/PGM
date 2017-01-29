@@ -32,7 +32,7 @@ for i in range(21):
     nodeList.append(var)
 
 F=PGM.FactorList(factors)
-isMax = 0
+isMax = 1
 
 #g = nx.erdos_renyi_graph(10,.3,seed=1234) # g should be connected
 #scipy.random.seed(38422)

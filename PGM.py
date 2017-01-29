@@ -5,9 +5,10 @@ import networkx as nx
 import itertools
 import time
 import scipy.ndimage
+from operator import add,mul
 #import copy
 
-class factor(object):
+class factor:
     def __init__(self,var,card,val):
         self.var =  scipy.array(var)
         self.card = scipy.array(card).astype(int)
@@ -83,7 +84,7 @@ class factor(object):
     def __pow__(self,p): # useful for TRW Message passing
         return factor(self.var,self.card,self.val**p)
 
-class FactorList(object):
+class FactorList:
     """Contains a list of factors"""
     def __init__(self,factors):
         self.factors = list(factors)
@@ -133,7 +134,7 @@ class FactorList(object):
         cc = list( nx.connected_components(self.g) )
         nodes = [random.sample(cluster,1)[0] for cluster in cc]
         for n1,n2 in zip(nodes[:-1],nodes[1:]):
-            self.factors.append(factor(var=[n1,n2], card=self.cardVec[[n1,n2]], val=scipy.ones(4)))
+            self.factors.append(factor(var=[n1,n2],card=self.cardVec[[n1,n2]],val=scipy.ones(4)))
         self.update()
         
     def JointDistn(self):
@@ -197,9 +198,9 @@ class FactorList(object):
            entity F.marg_clique_tree"""
         M = []   
         for clq in cliques:
-            for f in self.marg_clique_tree.factors:                
-                if scipy.all([s in f.var for s in clq]):
-                    marg = f.Marginalize(scipy.setdiff1d(f.var,clq))
+            for i,data in self.marg_clique_tree.nodes_iter(data=True):                
+                if scipy.all([s in data['clique'] for s in clq]):
+                    marg = data['fac'].Marginalize(scipy.setdiff1d(data['fac'].var,clq))
                     marg.val = marg.val/sum(marg.val)
                     M.append(marg)
                     break
@@ -219,12 +220,10 @@ class CliqueTree(nx.DiGraph):
         self.nop = 0
         
         self.compute_clique_potentials(F)
-        
         self.calibrate(isMax,findZ)
 
     def compute_clique_potentials(self,F):
         """Computes initial potentials for clique trees"""
-        N=self.number_of_nodes()
         
         #assignment of factors to cliques
         alpha = -1*scipy.ones(len(F.factors), dtype=int)
@@ -234,18 +233,15 @@ class CliqueTree(nx.DiGraph):
                 if len(scipy.setdiff1d(f.var,data['clique']) ) ==0:
                     alpha[i] = int(j)
                     break
-        for i in range(N):
-            var = scipy.array(self.node[i]['clique'],dtype=int)
-            card = F.cardVec[var]
-            val = scipy.ones( card.prod() )
-            self.node[i]['fac'] = factor(var,card,val)
+        for i in self.nodes():
+            self.node[i]['fac'] = factor([],[],[])
         
         for i,j in enumerate(alpha):
             self.node[j]['fac'] *= F.factors[i]
             self.nop += scipy.prod(self.node[j]['fac'].card)
         
     def calibrate(self,isMax,findZ):
-        
+        """Computes correct clique marginals by passing messages on tree"""
         N = self.number_of_nodes()
         if isMax==1:
             for i in self.nodes():
@@ -257,41 +253,36 @@ class CliqueTree(nx.DiGraph):
         
         I,J = get_next_cliques(self)
         while I >= 0:
-            setdiff = scipy.setdiff1d(self.node[I]['fac'].var,self.node[J]['fac'].var)
-            dummy = self.node[I]['fac']
-            for k in self.predecessors(I):
-                if self.edge[k][I]['msg_ind']==1 and k !=J:
-                    if isMax==0:
-                        dummy *= self.edge[k][I]['msg']
-                    else:
-                        dummy += self.edge[k][I]['msg']
-                    self.nop += scipy.prod(dummy.card)
-            if isMax==0:
-                self.edge[I][J]['msg']= dummy.Marginalize( setdiff )
-                if findZ==0: # DOnt marginalize to compute Z
-                    self.edge[I][J]['msg'].val=self.edge[I][J]['msg'].val/sum(self.edge[I][J]['msg'].val)
-            else:
-                self.edge[I][J]['msg']=dummy.MaxMarginalize( setdiff )
-            self.nop += scipy.prod(dummy.card)
-
+            
+            self.pass_message(I,J,isMax,findZ)
             self.edge[I][J]['msg_ind'] = 1 # message passed from I to J
             I,J = get_next_cliques(self)
-            
+           
         for i in self.nodes():
             if isMax==0:
-                self.node[i]['fac'] *= reduce(lambda x,y:x*y,(self.edge[j][i]['msg'] for j in self.predecessors(i)))
+                self.node[i]['fac'] *= reduce(mul,(self.edge[j][i]['msg'] for j in self.predecessors(i)))
             else:
-                self.node[i]['fac'] += reduce(lambda x,y:x+y,(self.edge[j][i]['msg'] for j in self.predecessors(i)))
+                self.node[i]['fac'] += reduce(add,(self.edge[j][i]['msg'] for j in self.predecessors(i)))
             self.nop += N*scipy.prod(self.node[i]['fac'].card) # check this
-
-def min_fill_node(g):
-    """returns the node with minimum fill edges"""
-    return min( g.nodes(),key = lambda x:fill_edges(g,x) )
-def fill_edges(g,n):         
-    ngbrs = g.neighbors(n)        
-    # e = number of edges between neighbors of 'n' 
-    e = sum([g.edge[i].has_key(j) for i,j in itertools.combinations(ngbrs,2) ])
-    return len(ngbrs)*(len(ngbrs)-1)/2 - e
+    
+    def pass_message(self,I,J,isMax,findZ):
+        """pass message from clique I to J"""
+        dummy = self.node[I]['fac']
+        for k in self.predecessors(I):
+            if self.edge[k][I]['msg_ind']==1 and k !=J:
+                if isMax==0:
+                    dummy *= self.edge[k][I]['msg']
+                else:
+                    dummy += self.edge[k][I]['msg']
+                self.nop += scipy.prod(dummy.card)
+        setdiff = scipy.setdiff1d(self.node[I]['fac'].var,self.node[J]['fac'].var)
+        if isMax==0:
+            self.edge[I][J]['msg']= dummy.Marginalize( setdiff )
+            if findZ==0: # Dont marginalize to compute Z
+                self.edge[I][J]['msg'].val=self.edge[I][J]['msg'].val/sum(self.edge[I][J]['msg'].val)
+        else:
+            self.edge[I][J]['msg']=dummy.MaxMarginalize( setdiff )
+        self.nop += scipy.prod(dummy.card)
 
 def create_clique_tree(g):
     """creates clique tree from undirected graph g; and changes it to """
@@ -308,7 +299,16 @@ def create_clique_tree(g):
         n = min_fill_node(g2) # uncomment above 2 lines for min-neighbor
         eliminate_var(n, g2,clq_ind,tree)
     tree = prune_tree(tree)
-    return tree.to_directed()
+    return tree
+
+def min_fill_node(g):
+    """returns the node with minimum fill edges"""
+    return min( g.nodes(),key = lambda x:fill_edges(g,x) )
+def fill_edges(g,n):         
+    ngbrs = g.neighbors(n)        
+    # e = number of edges between neighbors of 'n' 
+    e = sum([g.edge[i].has_key(j) for i,j in itertools.combinations(ngbrs,2) ])
+    return len(ngbrs)*(len(ngbrs)-1)/2 - e
         
 def eliminate_var(n, g,clq_ind,tree):
     """Eliminates n from graph g; updates cld_ind and tree"""
@@ -343,13 +343,12 @@ def prune_tree(tree):
 def get_next_cliques(tree):
     """outputs next pair of cliques between whom message can be passed,
     If negative numbers, no pair of cliques possible"""    
-    for i in tree.nodes():
-        for j in tree.successors(i):
-            if tree.edge[i][j]['msg_ind']==0: #no message from i to j
-            # if all neighbouring cliques except j have sent a message
-                msg_indices = [tree.edge[k][i]['msg_ind'] for k in tree.predecessors(i) if k!=j]
-                if scipy.all(msg_indices):
-                    return i,j
+    for i,j in tree.edges():
+        if tree.edge[i][j]['msg_ind']==0: #no message from i to j
+        # if all neighbouring cliques except j have sent a message
+            msg_indices = [tree.edge[k][i]['msg_ind'] for k in tree.predecessors(i) if k!=j]
+            if scipy.all(msg_indices):
+                return i,j
     return -1,-1 # returning -1 would mean no more cliques; all messages have been passed
     
 def max_decode(M):
