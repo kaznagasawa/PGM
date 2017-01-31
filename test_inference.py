@@ -32,7 +32,7 @@ for i in range(21):
     nodeList.append(var)
 
 F=PGM.FactorList(factors)
-isMax = 1
+isMax = 0
 
 #g = nx.erdos_renyi_graph(10,.3,seed=1234) # g should be connected
 #scipy.random.seed(38422)
@@ -59,7 +59,7 @@ for a in A:
     output=output+d[a]
 print output
 
-#pr.print_stats(sort='tottime')
+pr.print_stats(sort='tottime')
 #----Copied from test.py.
 #---code for testing PGM functions
 
