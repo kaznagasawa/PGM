@@ -12,6 +12,9 @@ import gzip
 import cPickle
 import matplotlib.pyplot as plt
 
+def hamming_dist(x,y):
+    """hamming distance between arrays x and y"""
+    return abs(x-y).sum()
 def denoise(image,error,beta):
     """Denoises image with error rate 'error' and neighbor affinity 'beta' """
     m = int(scipy.sqrt(len(image)))
@@ -148,7 +151,7 @@ train_set,_ = ds[0]
 er = .1
 l0 = er/(1-er)#lambda(y=0) = ln(p(0|1)/p(1|0)) = ln(er/(1-er))
 l1 = (1-er)/er
-act_image = train_set[150]
+act_image = train_set[160]
 act_image[act_image!=0]=1
 
 r = scipy.random.binomial(1,er,size = 784 )
@@ -171,50 +174,28 @@ facList=[]
 for e1,e2 in g.edges():
     facList.append(PGM.factor([e1,e2],[2,2],[ebeta,1,1,ebeta]))
 for n in g.nodes():
-    facList.append(PGM.factor([n],[2],[1,l0 if image[n]<=.1 else l1]))
+    for idx,f in enumerate(facList):
+        if n in f.var:
+            facList[idx] *= PGM.factor([n],[2],[1,l0 if image[n]<=.1 else l1])
+            break
     
 F = PGM.FactorList(facList)
 theta = PGM.factors2ExpFam(F)
 model = MAP_inference_IP(F)
 clean_image = scipy.array([int(model.Y[s,s].value) for s in range(m**2)])
 
+nominal = theta.copy()
+interval = .1*scipy.absolute(nominal)
+model2,lb = solve_IU_robust_MAP(nominal,interval)
+robust_image = scipy.array([int(model2.Y[s,s].value) for s in range(m**2)])
+
 clean_image2 = denoise(image,er,beta)
 fig,[[ax1,ax2],[ax3,ax4]]= plt.subplots(2,2)
 ax1.spy(act_image.reshape(28,28))
 ax2.spy(image.reshape((28,28)))
 ax3.spy(clean_image.reshape(28,28))
-ax4.spy(clean_image2.reshape(28,28))
-print abs(clean_image-clean_image2).sum()
+ax4.spy(robust_image.reshape(28,28))
+print hamming_dist(clean_image,act_image)
+print hamming_dist(robust_image,act_image)
 
-#nominal = theta.copy()
-#interval = .1*scipy.absolute(nominal)
-#model2,lb = solve_IU_robust_MAP(nominal,interval)
 #A_rob = scipy.array([int(model2.Y[s,s].value) for s in range(m**2)])
-##M,logZ = BP.run_BP(F)
-#
-##for n in g.nodes():
-##    if n != 's' and n!= 't':
-##        if image[n] <=0.1: #image[n] ==0
-##            g.add_edge('s',n,cap = scipy.log( (1-er)/er) )
-##            facList.append(PGM.factor() )
-##        else:
-##            g.add_edge(n,'t',cap = scipy.log( (1-er)/er))
-##
-##value, partition = nx.minimum_cut(g,'s','t',capacity = 'cap')
-##
-#y1 = scipy.zeros(784)
-#y2 = scipy.zeros(784)
-#for s in range(784):
-#    if model.Y[s,s].value>=.9:
-#        y1[s] = 1
-#    if model2.Y[s,s].value>=.9:
-#        y2[s] = 1
-#y1 = y1.reshape([28,28])
-#y2 = y2.reshape([28,28])
-##
-#fig,[ax1,ax2]= plt.subplots(1,2)
-#ax1.spy(y1)
-#ax2.spy(y2)
-#ax3.spy(y)
-
-#print scipy.absolute(y-act_image.reshape([28,28])).sum() / 784.0

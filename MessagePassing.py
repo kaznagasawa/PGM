@@ -1,4 +1,5 @@
 # Mesage passing algorithms
+# F can only accept pairwise factors; change it to accept singleton factors also
 # DONE (I think): regular BP,TRW BP
 #Next goal: Updating edge appearance probs
 
@@ -42,7 +43,7 @@ def estimate_Z_BP(F,g):
 
             val = g.node[t]['marg']/g.edge[s][t]['msg'].val
             msg2 = PGM.factor([t],[F.cardVec[t]],val)
-            
+
             marg = msg1*msg2* g.edge[s][t]['factor']        
             marg.val = marg.val/sum(marg.val)
             marg2 = marg.Marginalize(s)*marg.Marginalize(t)
