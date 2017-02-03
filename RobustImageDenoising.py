@@ -12,6 +12,50 @@ import gzip
 import cPickle
 import matplotlib.pyplot as plt
 
+def denoise(image,error,beta):
+    """Denoises image with error rate 'error' and neighbor affinity 'beta' """
+    m = int(scipy.sqrt(len(image)))
+    
+    try: # assert that length of image is a square number
+        assert m**2 == len(image)
+    except AssertionError:
+        raise AssertionError('Length of image should be a square number')
+    
+    l0 = scipy.log(error/(1-error))#lambda(y=0) = ln(p(0|1)/p(1|0)) = ln(er/(1-er))
+    l1 = scipy.log((1-error)/error)
+    
+    g = nx.Graph()
+    
+    for i in range(m):
+        for j in range(m-1):
+            g.add_edge(m*j+i,m*(j+1)+i,cap = beta)
+    for i in range(m-1):
+        for j in range(m):
+            g.add_edge(m*j+i,m*j+i+1,cap = beta)
+    g.add_nodes_from(['s','t'])        
+    g = g.to_directed()
+    
+    # 's' is on black nodes side; t is on white nodes side
+    for n in g.nodes():
+        if n != 's' and n!= 't':
+            if image[n] >=0.1: #image[n] ==1 i.e. black side
+                g.add_edge('s',n,cap = l1 )
+            else:
+                g.add_edge(n,'t',cap = -l0 )
+    
+    value, partition = nx.minimum_cut(g,'s','t',capacity = 'cap')
+    
+    if 's' in partition[0]:
+        black_nodes,white_nodes = partition
+    else:
+        white_nodes,black_nodes = partition
+        
+    y = scipy.zeros_like(image,dtype=int) #denoised image
+    for n in black_nodes:
+        if n != 's':            
+            y[n] = 1
+    return y
+
 def setup_model(g):
     """sets up the model for solving robust MAP problem"""
         
@@ -51,7 +95,7 @@ def MAP_inference_IP(F,warmstart = False):
     model = setup_model(F.g)
     
     theta = PGM.factors2ExpFam(F)  
-    logZ = get_logZ(theta)
+    logZ = 0#get_logZ(theta)
     if warmstart:
         A,max_p = PGM.greedy_MAP_assignment(theta)
         for s,t in model.full_set:
@@ -102,66 +146,75 @@ ds = cPickle.load( gzip.open('mnist.pkl.gz') )
 train_set,_ = ds[0]
 
 er = .1
+l0 = er/(1-er)#lambda(y=0) = ln(p(0|1)/p(1|0)) = ln(er/(1-er))
+l1 = (1-er)/er
 act_image = train_set[150]
 act_image[act_image!=0]=1
-act_image = act_image.reshape([28,28])
 
-r = scipy.random.binomial(1,er,size = (28,28) )
+r = scipy.random.binomial(1,er,size = 784 )
 image = act_image + r* (1-2*act_image)
 
 #plt.imshow(image, cmap=plt.cm.gray_r)
 #plt.spy(image)
-size = 28
 beta = .8
+ebeta = scipy.exp(beta) #.....WHY NOT beta/2 ?????
 
 g = nx.Graph()
 m = 28
 for i in range(m):
     for j in range(m-1):
-        g.add_edge(m*j+i,m*(j+1)+i)
+        g.add_edge(m*j+i,m*(j+1)+i,cap = beta)
 for i in range(m-1):
     for j in range(m):
-        g.add_edge(m*j+i,m*j+i+1)
+        g.add_edge(m*j+i,m*j+i+1,cap = beta)
 facList=[]        
 for e1,e2 in g.edges():
-    rnd = scipy.rand()
-    g.edge[e1][e2]['cap'] = beta*(1 if rnd >.5 else -1)
-    facList.append(PGM.factor([e1,e2],[2,2],[1,1,1,scipy.exp(beta*(1 if rnd >.5 else -1))]))
-
+    facList.append(PGM.factor([e1,e2],[2,2],[ebeta,1,1,ebeta]))
+for n in g.nodes():
+    facList.append(PGM.factor([n],[2],[1,l0 if image[n]<=.1 else l1]))
+    
 F = PGM.FactorList(facList)
 theta = PGM.factors2ExpFam(F)
 model = MAP_inference_IP(F)
-A_act = scipy.array([int(model.Y[s,s].value) for s in range(m**2)])
+clean_image = scipy.array([int(model.Y[s,s].value) for s in range(m**2)])
 
-nominal = theta.copy()
-interval = .1*scipy.absolute(nominal)
-model2,lb = solve_IU_robust_MAP(nominal,interval)
-A_rob = scipy.array([int(model2.Y[s,s].value) for s in range(m**2)])
-#M,logZ = BP.run_BP(F)
+clean_image2 = denoise(image,er,beta)
+fig,[[ax1,ax2],[ax3,ax4]]= plt.subplots(2,2)
+ax1.spy(act_image.reshape(28,28))
+ax2.spy(image.reshape((28,28)))
+ax3.spy(clean_image.reshape(28,28))
+ax4.spy(clean_image2.reshape(28,28))
+print abs(clean_image-clean_image2).sum()
 
-#for n in g.nodes():
-#    if n != 's' and n!= 't':
-#        if image[n] <=0.1: #image[n] ==0
-#            g.add_edge('s',n,cap = scipy.log( (1-er)/er) )
-#            facList.append(PGM.factor() )
-#        else:
-#            g.add_edge(n,'t',cap = scipy.log( (1-er)/er))
+#nominal = theta.copy()
+#interval = .1*scipy.absolute(nominal)
+#model2,lb = solve_IU_robust_MAP(nominal,interval)
+#A_rob = scipy.array([int(model2.Y[s,s].value) for s in range(m**2)])
+##M,logZ = BP.run_BP(F)
 #
-#value, partition = nx.minimum_cut(g,'s','t',capacity = 'cap')
-#
-y1 = scipy.zeros(784)
-y2 = scipy.zeros(784)
-for s in range(784):
-    if model.Y[s,s].value>=.9:
-        y1[s] = 1
-    if model2.Y[s,s].value>=.9:
-        y2[s] = 1
-y1 = y1.reshape([28,28])
-y2 = y2.reshape([28,28])
-#
-fig,[ax1,ax2]= plt.subplots(1,2)
-ax1.spy(y1)
-ax2.spy(y2)
+##for n in g.nodes():
+##    if n != 's' and n!= 't':
+##        if image[n] <=0.1: #image[n] ==0
+##            g.add_edge('s',n,cap = scipy.log( (1-er)/er) )
+##            facList.append(PGM.factor() )
+##        else:
+##            g.add_edge(n,'t',cap = scipy.log( (1-er)/er))
+##
+##value, partition = nx.minimum_cut(g,'s','t',capacity = 'cap')
+##
+#y1 = scipy.zeros(784)
+#y2 = scipy.zeros(784)
+#for s in range(784):
+#    if model.Y[s,s].value>=.9:
+#        y1[s] = 1
+#    if model2.Y[s,s].value>=.9:
+#        y2[s] = 1
+#y1 = y1.reshape([28,28])
+#y2 = y2.reshape([28,28])
+##
+#fig,[ax1,ax2]= plt.subplots(1,2)
+#ax1.spy(y1)
+#ax2.spy(y2)
 #ax3.spy(y)
 
 #print scipy.absolute(y-act_image.reshape([28,28])).sum() / 784.0

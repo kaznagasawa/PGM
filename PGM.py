@@ -20,14 +20,14 @@ class factor:
         if len(f.var) == 0:
             return self
         var = scipy.union1d(self.var,f.var)
-        card = scipy.empty_like(var)
+        card = scipy.empty_like(var,dtype=int)
         
         map1 = [scipy.where(var==i)[0][0] for i in self.var]
         map2 = [scipy.where(var==i)[0][0] for i in f.var]
         card[map1]=self.card
         card[map2] = f.card
         
-        assignments = I2A(range(int( card.prod() )), card)
+        assignments = I2A(range(card.prod()), card)
         indx1 = A2I(assignments[:, map1], self.card)
         indx2 = A2I(assignments[:, map2], f.card)
         if oper == 'P':
@@ -54,8 +54,8 @@ class factor:
         
         assignments = I2A(range(len(self.val)), self.card)
         indx = A2I(assignments[:, map1], card)
-        
         val = scipy.ndimage.sum(self.val,indx,index = range( card.prod() ))
+        
         return factor(var,card,val)
 
     def MaxMarginalize(self,V):
@@ -66,8 +66,8 @@ class factor:
         
         assignments = I2A(range(len(self.val)), self.card)
         indx = A2I(assignments[:, map1], card)
-        
         val = scipy.ndimage.maximum(self.val,indx,index = range( card.prod() ))
+        
         return factor(var,card,val)
         
     def copy(self):
@@ -108,9 +108,8 @@ class FactorList:
         cardVec = scipy.empty_like(V)
         for i,v in enumerate(V):
             for f in self.factors:
-                if v in f.var:
-                    index, = (f.var == v).nonzero()                
-                    cardVec[i]=f.card[ index[0] ]
+                if v in f.var:              
+                    cardVec[i]=f.card[ f.var==v ][0]
                     break
         return cardVec.astype(int)
         
@@ -224,7 +223,7 @@ class CliqueTree(nx.DiGraph):
         for i in self.nodes():
             self.node[i]['fac'] = factor([],[],[])
                    
-        for f in F.factors:
+        for f in F.factors: # assign each factor to a clique
             for j,data in self.nodes_iter(data=True):
                 if len(scipy.setdiff1d(f.var,data['clique']) ) ==0:
                     self.node[j]['fac'] *= f
